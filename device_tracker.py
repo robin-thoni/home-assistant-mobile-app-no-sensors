@@ -36,8 +36,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up Mobile app based off an entry."""
-    entity = MobileAppEntity(entry)
-    async_add_entities([entity])
+    pass
 
 
 class MobileAppEntity(TrackerEntity, RestoreEntity):

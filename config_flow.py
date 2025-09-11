@@ -40,18 +40,6 @@ class MobileAppFlowHandler(ConfigFlow, domain=DOMAIN):
         else:
             user_input[ATTR_DEVICE_ID] = str(uuid.uuid4()).replace("-", "")
 
-        # Register device tracker entity and add to person registering app
-        entity_registry = er.async_get(self.hass)
-        devt_entry = entity_registry.async_get_or_create(
-            "device_tracker",
-            DOMAIN,
-            user_input[ATTR_DEVICE_ID],
-            suggested_object_id=user_input[ATTR_DEVICE_NAME],
-        )
-        await person.async_add_user_device_tracker(
-            self.hass, user_input[CONF_USER_ID], devt_entry.entity_id
-        )
-
         return self.async_create_entry(
             title=user_input[ATTR_DEVICE_NAME], data=user_input
         )

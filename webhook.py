@@ -426,9 +426,6 @@ async def webhook_update_location(
     hass: HomeAssistant, config_entry: ConfigEntry, data: dict[str, Any]
 ) -> Response:
     """Handle an update location webhook."""
-    async_dispatcher_send(
-        hass, SIGNAL_LOCATION_UPDATE.format(config_entry.entry_id), data
-    )
     return empty_okay_response()
 
 
@@ -553,66 +550,15 @@ async def webhook_register_sensor(
     hass: HomeAssistant, config_entry: ConfigEntry, data: dict[str, Any]
 ) -> Response:
     """Handle a register sensor webhook."""
-    entity_type: str = data[ATTR_SENSOR_TYPE]
-    unique_id: str = data[ATTR_SENSOR_UNIQUE_ID]
-    device_name: str = config_entry.data[ATTR_DEVICE_NAME]
 
-    unique_store_key = _gen_unique_id(config_entry.data[CONF_WEBHOOK_ID], unique_id)
-    entity_registry = er.async_get(hass)
-    existing_sensor = entity_registry.async_get_entity_id(
-        entity_type, DOMAIN, unique_store_key
-    )
-
-    data[CONF_WEBHOOK_ID] = config_entry.data[CONF_WEBHOOK_ID]
-
-    # If sensor already is registered, update current state instead
-    if existing_sensor:
-        _LOGGER.debug(
-            "Re-register for %s of existing sensor %s", device_name, unique_id
-        )
-
-        entry = entity_registry.async_get(existing_sensor)
-        assert entry is not None
-        changes: dict[str, Any] = {}
-
-        if (
-            new_name := f"{device_name} {data[ATTR_SENSOR_NAME]}"
-        ) != entry.original_name:
-            changes["original_name"] = new_name
-
-        if (
-            should_be_disabled := data.get(ATTR_SENSOR_DISABLED)
-        ) is None or should_be_disabled == entry.disabled:
-            pass
-        elif should_be_disabled:
-            changes["disabled_by"] = er.RegistryEntryDisabler.INTEGRATION
-        else:
-            changes["disabled_by"] = None
-
-        for ent_reg_key, data_key in (
-            ("device_class", ATTR_SENSOR_DEVICE_CLASS),
-            ("unit_of_measurement", ATTR_SENSOR_UOM),
-            ("entity_category", ATTR_SENSOR_ENTITY_CATEGORY),
-            ("original_icon", ATTR_SENSOR_ICON),
-        ):
-            if data_key in data and getattr(entry, ent_reg_key) != data[data_key]:
-                changes[ent_reg_key] = data[data_key]
-
-        if changes:
-            entity_registry.async_update_entity(existing_sensor, **changes)
-
-        async_dispatcher_send(hass, f"{SIGNAL_SENSOR_UPDATE}-{unique_store_key}", data)
-    else:
-        data[CONF_UNIQUE_ID] = unique_store_key
-        data[CONF_NAME] = (
-            f"{config_entry.data[ATTR_DEVICE_NAME]} {data[ATTR_SENSOR_NAME]}"
-        )
-
-        register_signal = f"{DOMAIN}_{data[ATTR_SENSOR_TYPE]}_register"
-        async_dispatcher_send(hass, register_signal, data)
+    hass.data[DOMAIN]["entities_cache"][config_entry.data[CONF_WEBHOOK_ID]][data["unique_id"]] = data
 
     return webhook_response(
-        {"success": True},
+        {
+            "success": True,
+            "is_disabled": True,
+            "disabled": True,
+        },
         registration=config_entry.data,
         status=HTTPStatus.CREATED,
     )
@@ -640,65 +586,13 @@ async def webhook_update_sensor_states(
     hass: HomeAssistant, config_entry: ConfigEntry, data: list[dict[str, Any]]
 ) -> Response:
     """Handle an update sensor states webhook."""
-    device_name: str = config_entry.data[ATTR_DEVICE_NAME]
     resp: dict[str, Any] = {}
-    entity_registry = er.async_get(hass)
-
     for sensor in data:
-        entity_type: str = sensor[ATTR_SENSOR_TYPE]
-
-        unique_id: str = sensor[ATTR_SENSOR_UNIQUE_ID]
-
-        unique_store_key = _gen_unique_id(config_entry.data[CONF_WEBHOOK_ID], unique_id)
-
-        if not (
-            entity_id := entity_registry.async_get_entity_id(
-                entity_type, DOMAIN, unique_store_key
-            )
-        ):
-            _LOGGER.debug(
-                "Refusing to update %s non-registered sensor: %s",
-                device_name,
-                unique_store_key,
-            )
-            err_msg = f"{entity_type} {unique_id} is not registered"
-            resp[unique_id] = {
-                "success": False,
-                "error": {"code": ERR_SENSOR_NOT_REGISTERED, "message": err_msg},
-            }
-            continue
-
-        try:
-            sensor = SENSOR_SCHEMA_FULL(sensor)
-        except vol.Invalid as err:
-            err_msg = vol.humanize.humanize_error(sensor, err)
-            _LOGGER.error(
-                "Received invalid sensor payload from %s for %s: %s",
-                device_name,
-                unique_id,
-                err_msg,
-            )
-            resp[unique_id] = {
-                "success": False,
-                "error": {"code": ERR_INVALID_FORMAT, "message": err_msg},
-            }
-            continue
-
-        sensor[CONF_WEBHOOK_ID] = config_entry.data[CONF_WEBHOOK_ID]
-        async_dispatcher_send(
-            hass,
-            f"{SIGNAL_SENSOR_UPDATE}-{unique_store_key}",
-            sensor,
-        )
-
-        resp[unique_id] = {"success": True}
-
-        # Check if disabled
-        entry = entity_registry.async_get(entity_id)
-
-        if entry and entry.disabled_by:
-            resp[unique_id]["is_disabled"] = True
-
+        resp[sensor[ATTR_SENSOR_UNIQUE_ID]] = {
+            "success": True,
+            "is_disabled": True,
+            "disabled": True,
+        }
     return webhook_response(resp, registration=config_entry.data)
 
 
@@ -748,15 +642,9 @@ async def webhook_get_config(
     webhook_id = config_entry.data[CONF_WEBHOOK_ID]
 
     entities = {}
-    for entry in er.async_entries_for_config_entry(
-        er.async_get(hass), config_entry.entry_id
-    ):
-        if entry.domain in ("binary_sensor", "sensor"):
-            unique_id = _extract_sensor_unique_id(webhook_id, entry.unique_id)
-        else:
-            unique_id = entry.unique_id
 
-        entities[unique_id] = {"disabled": entry.disabled}
+    for entity_name, entoty_data in hass.data[DOMAIN]["entities_cache"][config_entry.data[CONF_WEBHOOK_ID]].items():
+        entities[entity_name] = {"disabled": True}
 
     resp["entities"] = entities
 
